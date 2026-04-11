@@ -1,21 +1,20 @@
 package com.ionhex975.vulkanpostfx.client.runtime;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParser;
 import com.ionhex975.vulkanpostfx.VulkanPostFX;
+import com.ionhex975.vulkanpostfx.client.effect.PostFxEffectRegistry;
 import com.ionhex975.vulkanpostfx.client.pack.ActiveShaderPackManager;
 import com.ionhex975.vulkanpostfx.client.pack.ShaderPackContainer;
 import com.ionhex975.vulkanpostfx.client.pack.ZipShaderPackReader;
+import com.ionhex975.vulkanpostfx.client.runtime.posteffect.ZipPostEffectConfig;
+import com.ionhex975.vulkanpostfx.client.runtime.posteffect.ZipPostEffectParser;
+import com.ionhex975.vulkanpostfx.client.runtime.posteffect.ZipShaderReferenceValidationResult;
+import com.ionhex975.vulkanpostfx.client.runtime.posteffect.ZipShaderReferenceValidator;
+import com.ionhex975.vulkanpostfx.client.runtime.zip.RuntimeZipPackMaterializationResult;
+import com.ionhex975.vulkanpostfx.client.runtime.zip.RuntimeZipPackState;
+import com.ionhex975.vulkanpostfx.client.runtime.zip.ZipPackMaterializer;
+import com.ionhex975.vulkanpostfx.client.state.PostFxRuntimeState;
+import net.minecraft.client.Minecraft;
 
-/**
- * 当前活动入口后处理桥。
- *
- * 当前阶段职责：
- * - 读取当前活动包的 entry_post_effect
- * - 如果是 ZIP 包，则把 JSON 文本读出来
- * - 做基础 JSON 校验
- * - 缓存到运行时，供下一阶段桥接 ShaderManager 使用
- */
 public final class ActivePostEffectBridge {
     private static ActivePostEffectSource activeSource = ActivePostEffectSource.NONE;
 
@@ -26,6 +25,10 @@ public final class ActivePostEffectBridge {
         ShaderPackContainer activePack = ActiveShaderPackManager.getActivePack();
         if (activePack == null) {
             activeSource = ActivePostEffectSource.NONE;
+            RuntimeZipPackState.clear();
+            PostFxRuntimeState.clearActiveExternalPostEffectId();
+            PostFxRuntimeState.setActiveEffectKey(PostFxEffectRegistry.DEBUG_INVERT);
+
             VulkanPostFX.LOGGER.warn("[{}] No active shader pack; active post effect source cleared", VulkanPostFX.MOD_ID);
             return;
         }
@@ -33,6 +36,10 @@ public final class ActivePostEffectBridge {
         String entryPostEffect = activePack.manifest().entryPostEffect();
         if (entryPostEffect == null || entryPostEffect.isBlank()) {
             activeSource = ActivePostEffectSource.NONE;
+            RuntimeZipPackState.clear();
+            PostFxRuntimeState.clearActiveExternalPostEffectId();
+            PostFxRuntimeState.setActiveEffectKey(PostFxEffectRegistry.DEBUG_INVERT);
+
             VulkanPostFX.LOGGER.warn(
                     "[{}] Active shader pack '{}' does not declare entry_post_effect",
                     VulkanPostFX.MOD_ID,
@@ -45,13 +52,20 @@ public final class ActivePostEffectBridge {
             activeSource = new ActivePostEffectSource(
                     "builtin",
                     entryPostEffect,
-                    ""
+                    "",
+                    null,
+                    null
             );
 
+            RuntimeZipPackState.clear();
+            PostFxRuntimeState.clearActiveExternalPostEffectId();
+            PostFxRuntimeState.setActiveEffectKey(ActiveShaderPackManager.getActiveEffectKey());
+
             VulkanPostFX.LOGGER.info(
-                    "[{}] Active post effect source prepared from builtin pack: {}",
+                    "[{}] Active post effect source prepared from builtin pack: {}, resolvedBuiltinEffectKey={}",
                     VulkanPostFX.MOD_ID,
-                    entryPostEffect
+                    entryPostEffect,
+                    PostFxRuntimeState.getActiveEffectKey()
             );
             return;
         }
@@ -59,23 +73,60 @@ public final class ActivePostEffectBridge {
         if ("zip".equals(activePack.sourceId())) {
             try {
                 String rawJson = ZipShaderPackReader.readText(activePack.sourcePath(), entryPostEffect);
-                validateJson(rawJson);
+                ZipPostEffectConfig parsedConfig = ZipPostEffectParser.parse(rawJson);
+                ZipShaderReferenceValidationResult validationResult =
+                        ZipShaderReferenceValidator.validate(activePack, parsedConfig);
+
+                if (!validationResult.isValid()) {
+                    activeSource = ActivePostEffectSource.NONE;
+                    RuntimeZipPackState.clear();
+                    PostFxRuntimeState.clearActiveExternalPostEffectId();
+                    PostFxRuntimeState.setActiveEffectKey(PostFxEffectRegistry.DEBUG_INVERT);
+
+                    VulkanPostFX.LOGGER.error(
+                            "[{}] Active ZIP post effect source failed shader validation: checked={}, missing={}",
+                            VulkanPostFX.MOD_ID,
+                            validationResult.checkedCount(),
+                            validationResult.missingReferences()
+                    );
+                    return;
+                }
+
+                RuntimeZipPackMaterializationResult materialized = ZipPackMaterializer.materialize(
+                        activePack,
+                        Minecraft.getInstance().gameDirectory.toPath()
+                );
+
+                RuntimeZipPackState.apply(materialized);
+                PostFxRuntimeState.setActiveExternalPostEffectId(materialized.externalPostEffectId());
+                PostFxRuntimeState.setActiveEffectKey(PostFxEffectRegistry.DEBUG_INVERT);
 
                 activeSource = new ActivePostEffectSource(
                         "zip",
                         activePack.sourcePath() + "!/" + entryPostEffect,
-                        rawJson
+                        rawJson,
+                        parsedConfig,
+                        validationResult
                 );
 
                 VulkanPostFX.LOGGER.info(
-                        "[{}] Active post effect source loaded from zip: {} ({} chars)",
+                        "[{}] Active post effect source loaded from zip: {} ({} chars, {} targets, {} passes, checkedShaders={}, runtimeNamespace={}, externalPostEffectId={})",
                         VulkanPostFX.MOD_ID,
                         activeSource.displayPath(),
-                        rawJson.length()
+                        rawJson.length(),
+                        parsedConfig.targets().size(),
+                        parsedConfig.passes().size(),
+                        validationResult.checkedCount(),
+                        materialized.runtimeNamespace(),
+                        materialized.externalPostEffectId()
                 );
                 return;
             } catch (Exception e) {
                 activeSource = ActivePostEffectSource.NONE;
+                RuntimeZipPackState.clear();
+                PostFxRuntimeState.clearActiveExternalPostEffectId();
+                PostFxRuntimeState.setActiveEffectKey(PostFxEffectRegistry.DEBUG_INVERT);
+
                 VulkanPostFX.LOGGER.error(
                         "[{}] Failed to load active ZIP post effect source from '{}'",
                         VulkanPostFX.MOD_ID,
@@ -87,6 +138,10 @@ public final class ActivePostEffectBridge {
         }
 
         activeSource = ActivePostEffectSource.NONE;
+        RuntimeZipPackState.clear();
+        PostFxRuntimeState.clearActiveExternalPostEffectId();
+        PostFxRuntimeState.setActiveEffectKey(PostFxEffectRegistry.DEBUG_INVERT);
+
         VulkanPostFX.LOGGER.warn(
                 "[{}] Unsupported shader pack source '{}'; active post effect source cleared",
                 VulkanPostFX.MOD_ID,
@@ -96,12 +151,5 @@ public final class ActivePostEffectBridge {
 
     public static ActivePostEffectSource getActiveSource() {
         return activeSource;
-    }
-
-    private static void validateJson(String rawJson) {
-        JsonElement element = JsonParser.parseString(rawJson);
-        if (!element.isJsonObject()) {
-            throw new IllegalStateException("entry_post_effect root must be a JSON object");
-        }
     }
 }

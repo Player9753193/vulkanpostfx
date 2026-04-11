@@ -31,9 +31,11 @@ public final class BuiltinShaderPackSource implements ShaderPackSource {
 
         Set<String> resources = new LinkedHashSet<>();
         resources.add("assets/vulkanpostfx/post_effect/debug_invert.json");
+        resources.add("assets/vulkanpostfx/post_effect/debug_grayscale.json");
         resources.add("assets/vulkanpostfx/shaders/post/fullscreen.vsh");
         resources.add("assets/vulkanpostfx/shaders/post/invert.fsh");
         resources.add("assets/vulkanpostfx/shaders/post/blit.fsh");
+        resources.add("assets/vulkanpostfx/shaders/post/grayscale.fsh");
 
         ShaderPackResourceIndex index = new ShaderPackResourceIndex(resources);
 

@@ -10,13 +10,6 @@ import net.minecraft.server.packs.resources.PreparableReloadListener;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
-/**
- * 监听客户端资源热重载。
- *
- * 当前阶段职责：
- * - reload 完成后通知运行时重新应用当前 effect 状态
- * - 同时刷新当前活动包的 entry_post_effect 读取结果
- */
 public final class PostFxReloadHooks {
     private static final Identifier LISTENER_ID =
             Identifier.fromNamespaceAndPath("vulkanpostfx", "postfx_reload_restore");

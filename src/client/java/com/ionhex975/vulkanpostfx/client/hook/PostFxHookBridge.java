@@ -14,16 +14,6 @@ import net.minecraft.client.renderer.LevelTargetBundle;
 import net.minecraft.client.renderer.PostChain;
 import net.minecraft.resources.Identifier;
 
-/**
- * 当前阶段：
- * 1. 已命中世界渲染入口；
- * 2. 已命中 GameRenderer.render(...) 中真正的 PostFX 槽位；
- * 3. 默认不启用任何效果；
- * 4. 通过 F8 手动切换当前调试效果；
- * 5. 自定义链失败时自动回退到定义中的 fallback；
- * 6. 资源热重载完成后自动恢复当前目标状态；
- * 7. 当前效果从 Effect Registry 查询，而效果 key 来自活动光影包。
- */
 public final class PostFxHookBridge {
     private static boolean firstWorldFrameLogged;
     private static boolean firstWorldFrameFinishedLogged;
@@ -143,6 +133,41 @@ public final class PostFxHookBridge {
     }
 
     private static Identifier chooseCurrentEffect(Minecraft minecraft) {
+        Identifier externalId = PostFxRuntimeState.getActiveExternalPostEffectId();
+
+        VulkanPostFX.LOGGER.info(
+                "[{}] chooseCurrentEffect: activeExternalPostEffectId={}, activeEffectKey={}",
+                VulkanPostFX.MOD_ID,
+                externalId,
+                PostFxRuntimeState.getActiveEffectKey()
+        );
+
+        if (externalId != null) {
+            PostChain external = minecraft.getShaderManager().getPostChain(externalId, LevelTargetBundle.MAIN_TARGETS);
+
+            VulkanPostFX.LOGGER.info(
+                    "[{}] External post chain lookup: id={}, found={}",
+                    VulkanPostFX.MOD_ID,
+                    externalId,
+                    external != null
+            );
+
+            if (external != null) {
+                VulkanPostFX.LOGGER.info(
+                        "[{}] External ZIP post chain is available: {}",
+                        VulkanPostFX.MOD_ID,
+                        externalId
+                );
+                return externalId;
+            }
+
+            VulkanPostFX.LOGGER.warn(
+                    "[{}] External ZIP post chain is NOT available, falling back to builtin chain: {}",
+                    VulkanPostFX.MOD_ID,
+                    externalId
+            );
+        }
+
         String effectKey = PostFxRuntimeState.getActiveEffectKey();
         PostFxEffectDefinition definition = PostFxEffectRegistry.get(effectKey);
 
@@ -156,9 +181,18 @@ public final class PostFxHookBridge {
         }
 
         PostChain custom = minecraft.getShaderManager().getPostChain(definition.primaryId(), LevelTargetBundle.MAIN_TARGETS);
+
+        VulkanPostFX.LOGGER.info(
+                "[{}] Builtin post chain lookup: effectKey={}, id={}, found={}",
+                VulkanPostFX.MOD_ID,
+                effectKey,
+                definition.primaryId(),
+                custom != null
+        );
+
         if (custom != null) {
             VulkanPostFX.LOGGER.info(
-                    "[{}] Effect '{}' is available: {}",
+                    "[{}] Builtin effect '{}' is available: {}",
                     VulkanPostFX.MOD_ID,
                     definition.displayName(),
                     definition.primaryId()
@@ -167,7 +201,7 @@ public final class PostFxHookBridge {
         }
 
         VulkanPostFX.LOGGER.warn(
-                "[{}] Effect '{}' failed to load primary chain {}, falling back to {}",
+                "[{}] Builtin effect '{}' failed to load primary chain {}, falling back to {}",
                 VulkanPostFX.MOD_ID,
                 definition.displayName(),
                 definition.primaryId(),
