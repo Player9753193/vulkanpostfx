@@ -23,7 +23,8 @@ public final class BuiltinShaderPackSource implements ShaderPackSource {
                 "builtin_debug_pack",
                 "Builtin Debug Pack",
                 1,
-                PostFxEffectRegistry.DEBUG_INVERT
+                PostFxEffectRegistry.DEBUG_INVERT,
+                "assets/vulkanpostfx/post_effect/debug_invert.json"
         );
 
         return List.of(new ShaderPackContainer(manifest, SOURCE_ID, null));

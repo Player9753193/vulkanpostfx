@@ -78,7 +78,7 @@ public final class ZipShaderPackSource implements ShaderPackSource {
             ZipEntry manifestEntry = zipFile.getEntry(MANIFEST_PATH);
             if (manifestEntry == null) {
                 VulkanPostFX.LOGGER.warn(
-                        "[{}] Skipping zip shader pack without {}: {}",
+                        "[{}] Skipping zip shader pack without {} at zip root: {}",
                         VulkanPostFX.MOD_ID,
                         MANIFEST_PATH,
                         zipPath
@@ -93,13 +93,14 @@ public final class ZipShaderPackSource implements ShaderPackSource {
                 ShaderPackManifest manifest = ShaderPackManifestParser.parse(reader);
 
                 VulkanPostFX.LOGGER.info(
-                        "[{}] Parsed shader pack manifest from zip '{}': id='{}', name='{}', version={}, entryEffectKey={}",
+                        "[{}] Parsed shader pack manifest from zip '{}': id='{}', name='{}', version={}, entryEffectKey={}, entryPostEffect={}",
                         VulkanPostFX.MOD_ID,
                         zipPath.getFileName(),
                         manifest.id(),
                         manifest.name(),
                         manifest.version(),
-                        manifest.entryEffectKey()
+                        manifest.entryEffectKey(),
+                        manifest.entryPostEffect()
                 );
 
                 return new ShaderPackContainer(manifest, SOURCE_ID, zipPath);

@@ -20,8 +20,15 @@ public final class ShaderPackManifestParser {
         String name = getRequiredString(root, "name");
         int version = getRequiredInt(root, "version");
         String entryEffectKey = getRequiredString(root, "entry_effect_key");
+        String entryPostEffect = getRequiredString(root, "entry_post_effect");
 
-        return new ShaderPackManifest(id, name, version, entryEffectKey);
+        return new ShaderPackManifest(
+                id,
+                name,
+                version,
+                entryEffectKey,
+                entryPostEffect
+        );
     }
 
     private static String getRequiredString(JsonObject root, String key) throws IOException {
