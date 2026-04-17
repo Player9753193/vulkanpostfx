@@ -36,6 +36,7 @@ public final class VpfxShaderIncludeProcessor {
             Pattern.compile("^\\s*#include\\s+\"([^\"]+)\"\\s*$");
 
     private static final int MAX_INCLUDE_DEPTH = 64;
+    private static final int USED = 16;
 
     private final ZipFile zipFile;
     private final Map<String, String> flattenedCache = new HashMap<>();
