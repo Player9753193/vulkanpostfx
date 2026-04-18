@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.ionhex975.vulkanpostfx.client.runtime.texture.VpfxRuntimeTextureDescriptor;
 import com.ionhex975.vulkanpostfx.client.runtime.texture.VpfxRuntimeTextureManifest;
+import com.ionhex975.vulkanpostfx.client.shader.uniform.VpfxBuiltinUniformBuffer;
 
 public final class ZipPostEffectNamespaceRewriter {
     private ZipPostEffectNamespaceRewriter() {
@@ -63,6 +64,8 @@ public final class ZipPostEffectNamespaceRewriter {
             rewriteStringField(pass, "fragment_shader", originalNamespace, runtimeNamespace);
             rewriteStringField(pass, "output", originalNamespace, runtimeNamespace);
 
+            ensureVpfxBuiltinsUniformBlock(pass);
+
             if (pass.has("inputs") && pass.get("inputs").isJsonArray()) {
                 JsonArray inputs = pass.getAsJsonArray("inputs");
                 for (JsonElement inputElement : inputs) {
@@ -99,6 +102,36 @@ public final class ZipPostEffectNamespaceRewriter {
                 }
             }
         }
+    }
+
+    private static void ensureVpfxBuiltinsUniformBlock(JsonObject pass) {
+        JsonObject uniforms;
+        if (pass.has("uniforms") && pass.get("uniforms").isJsonObject()) {
+            uniforms = pass.getAsJsonObject("uniforms");
+        } else {
+            uniforms = new JsonObject();
+            pass.add("uniforms", uniforms);
+        }
+
+        if (uniforms.has(VpfxBuiltinUniformBuffer.BLOCK_NAME)) {
+            return;
+        }
+
+        JsonArray blockValues = new JsonArray();
+
+        JsonObject vec4Value = new JsonObject();
+        vec4Value.addProperty("type", "vec4");
+
+        JsonArray value = new JsonArray();
+        value.add(0.0F);
+        value.add(0.0F);
+        value.add(0.0F);
+        value.add(0.0F);
+
+        vec4Value.add("value", value);
+        blockValues.add(vec4Value);
+
+        uniforms.add(VpfxBuiltinUniformBuffer.BLOCK_NAME, blockValues);
     }
 
     private static void rewriteStringField(

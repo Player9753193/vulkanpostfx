@@ -3,14 +3,11 @@ package com.ionhex975.vulkanpostfx.client.runtime.zip;
 import com.ionhex975.vulkanpostfx.VulkanPostFX;
 import com.ionhex975.vulkanpostfx.client.pack.ShaderPackContainer;
 import com.ionhex975.vulkanpostfx.client.pack.ZipShaderPackReader;
-import com.ionhex975.vulkanpostfx.client.pack.vpfx.VpfxGraphDefinition;
-import com.ionhex975.vulkanpostfx.client.pack.vpfx.VpfxNativePackDefinition;
-import com.ionhex975.vulkanpostfx.client.pack.vpfx.VpfxPassDefinition;
 import com.ionhex975.vulkanpostfx.client.runtime.texture.VpfxRuntimeTextureDescriptor;
 import com.ionhex975.vulkanpostfx.client.runtime.texture.VpfxRuntimeTextureManifest;
 import com.ionhex975.vulkanpostfx.client.runtime.texture.VpfxRuntimeTextureManifestWriter;
+import com.ionhex975.vulkanpostfx.client.shader.VpfxShaderSourcePreprocessor;
 import com.ionhex975.vulkanpostfx.client.shader.include.VpfxShaderIncludeException;
-import com.ionhex975.vulkanpostfx.client.shader.include.VpfxShaderIncludeProcessor;
 import net.minecraft.resources.Identifier;
 
 import java.io.IOException;
@@ -18,8 +15,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 public final class ZipPackMaterializer {
@@ -76,7 +72,7 @@ public final class ZipPackMaterializer {
         Files.createDirectories(mainJsonPath.getParent());
         Files.writeString(mainJsonPath, rewrittenMainJson, StandardCharsets.UTF_8);
 
-        materializeReferencedShaders(activePack, runtimeRoot, runtimeNamespace);
+        preprocessAndCopyZipShaderTree(activePack.sourcePath(), runtimeRoot, runtimeNamespace);
         materializeDeclaredTextures(activePack, runtimeRoot, runtimeTextureManifest);
 
         VpfxRuntimeTextureManifestWriter.write(runtimeTextureManifest, runtimeRoot);
@@ -141,67 +137,74 @@ public final class ZipPackMaterializer {
         Files.writeString(runtimeRoot.resolve("pack.mcmeta"), mcmeta, StandardCharsets.UTF_8);
     }
 
-    private static void materializeReferencedShaders(
-            ShaderPackContainer activePack,
+    private static void preprocessAndCopyZipShaderTree(
+            Path zipPath,
             Path runtimeRoot,
             String runtimeNamespace
     ) throws IOException {
-        VpfxNativePackDefinition vpfxDefinition = activePack.vpfxDefinition();
-        VpfxGraphDefinition graph = vpfxDefinition.getGraph();
+        try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
+            VpfxShaderSourcePreprocessor preprocessor = new VpfxShaderSourcePreprocessor(zipFile);
 
-        Set<String> requiredShaderZipPaths = collectRequiredShaderZipPaths(graph);
+            var entries = zipFile.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                if (entry.isDirectory()) {
+                    continue;
+                }
 
-        try (ZipFile zipFile = new ZipFile(activePack.sourcePath().toFile())) {
-            VpfxShaderIncludeProcessor includeProcessor = new VpfxShaderIncludeProcessor(zipFile);
+                String name = entry.getName().replace('\\', '/');
 
-            for (String zipShaderPath : requiredShaderZipPaths) {
+                if (!name.startsWith("shaders/")) {
+                    continue;
+                }
+
+                if (name.endsWith(".DS_Store") || name.contains("/.DS_Store")) {
+                    VulkanPostFX.LOGGER.info(
+                            "[{}] Skipped ZIP junk file: {}",
+                            VulkanPostFX.MOD_ID,
+                            name
+                    );
+                    continue;
+                }
+
                 Path outPath = runtimeRoot
                         .resolve("assets")
                         .resolve(runtimeNamespace)
-                        .resolve(zipShaderPath);
+                        .resolve(name);
 
                 Files.createDirectories(outPath.getParent());
 
-                try {
-                    String flattened = includeProcessor.process(zipShaderPath);
-                    Files.writeString(outPath, flattened, StandardCharsets.UTF_8);
+                if (isShaderSource(name)) {
+                    try {
+                        String processed = preprocessor.preprocess(name);
+                        Files.writeString(outPath, processed, StandardCharsets.UTF_8);
+
+                        VulkanPostFX.LOGGER.info(
+                                "[{}] Materialized preprocessed shader asset: {} -> {}",
+                                VulkanPostFX.MOD_ID,
+                                name,
+                                outPath
+                        );
+                    } catch (VpfxShaderIncludeException e) {
+                        throw new IOException(
+                                "Failed to preprocess shader [" + e.getCode() + "][" + e.getPath() + "]: " + e.getMessage(),
+                                e
+                        );
+                    }
+                } else {
+                    try (InputStream in = zipFile.getInputStream(entry)) {
+                        Files.copy(in, outPath);
+                    }
 
                     VulkanPostFX.LOGGER.info(
-                            "[{}] Materialized referenced shader asset: {} -> {}",
+                            "[{}] Materialized raw shader asset: {} -> {}",
                             VulkanPostFX.MOD_ID,
-                            zipShaderPath,
+                            name,
                             outPath
-                    );
-                } catch (VpfxShaderIncludeException e) {
-                    throw new IOException(
-                            "Failed to preprocess referenced shader [" + e.getCode() + "][" + e.getPath() + "]: " + e.getMessage(),
-                            e
                     );
                 }
             }
         }
-    }
-
-    private static Set<String> collectRequiredShaderZipPaths(VpfxGraphDefinition graph) throws IOException {
-        Set<String> paths = new LinkedHashSet<>();
-
-        for (VpfxPassDefinition pass : graph.getPasses()) {
-            paths.add(toShaderZipPath(pass.getVertexShader(), true));
-            paths.add(toShaderZipPath(pass.getFragmentShader(), false));
-        }
-
-        return paths;
-    }
-
-    private static String toShaderZipPath(String shaderRef, boolean vertex) throws IOException {
-        int colon = shaderRef.indexOf(':');
-        if (colon < 0 || colon == shaderRef.length() - 1) {
-            throw new IOException("Invalid shader resource id: " + shaderRef);
-        }
-
-        String shaderPath = shaderRef.substring(colon + 1);
-        String extension = vertex ? ".vsh" : ".fsh";
-        return "shaders/" + shaderPath + extension;
     }
 
     private static void materializeDeclaredTextures(
@@ -224,7 +227,7 @@ public final class ZipPackMaterializer {
 
                 Files.createDirectories(outPath.getParent());
 
-                var entry = zipFile.getEntry(descriptor.getSourceZipPath());
+                ZipEntry entry = zipFile.getEntry(descriptor.getSourceZipPath());
                 if (entry == null || entry.isDirectory()) {
                     throw new IOException("Declared texture missing from zip: " + descriptor.getSourceZipPath());
                 }
@@ -245,5 +248,11 @@ public final class ZipPackMaterializer {
                 );
             }
         }
+    }
+
+    private static boolean isShaderSource(String zipEntryPath) {
+        return zipEntryPath.endsWith(".vsh")
+                || zipEntryPath.endsWith(".fsh")
+                || zipEntryPath.endsWith(".glsl");
     }
 }

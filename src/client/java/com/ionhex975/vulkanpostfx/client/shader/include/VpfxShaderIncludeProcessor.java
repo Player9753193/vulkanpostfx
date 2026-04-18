@@ -3,236 +3,150 @@ package com.ionhex975.vulkanpostfx.client.shader.include;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /**
- * VPFX shader include 预处理器。
+ * VPFX include 预处理器。
  *
  * 支持：
- * 1. 相对 include
- *    #include "common.glsl"
- *    #include "../shared/math.glsl"
+ * - #include "relative/path.glsl"
+ * - 相对当前 shader 所在目录解析
+ * - 自动递归展开
  *
- * 2. pack-root 绝对 include
- *    #include "/include/common.glsl"
- *
- * 规则：
- * - 只在 ZIP 内部解析
- * - 不允许越过 ZIP 根目录
- * - 检测 include 循环
- * - 失败时明确报错
+ * 明确限制：
+ * - 禁止 .. 路径逃逸
+ * - 限制最大递归深度
+ * - 检测循环 include
  */
 public final class VpfxShaderIncludeProcessor {
     private static final Pattern INCLUDE_PATTERN =
-            Pattern.compile("^\\s*#include\\s+\"([^\"]+)\"\\s*$");
+            Pattern.compile("(?m)^\\s*#include\\s+\"([^\"]+)\"\\s*$");
 
-    private static final int MAX_INCLUDE_DEPTH = 64;
+    private static final int MAX_INCLUDE_DEPTH = 32;
 
     private final ZipFile zipFile;
-    private final Map<String, String> flattenedCache = new HashMap<>();
 
     public VpfxShaderIncludeProcessor(ZipFile zipFile) {
         this.zipFile = zipFile;
     }
 
-    /**
-     * 对一个 shader entry 做完整 include 展开。
-     *
-     * @param zipEntryPath ZIP 内路径，例如：
-     *                     shaders/post/fullscreen.vsh
-     */
-    public String process(String zipEntryPath) throws VpfxShaderIncludeException {
-        if (zipEntryPath == null || zipEntryPath.isBlank()) {
-            throw new VpfxShaderIncludeException(
-                    "I000",
-                    "(blank)",
-                    "Shader entry path is blank"
-            );
-        }
-
-        String normalized = normalizeZipPath(zipEntryPath);
-        Deque<String> stack = new ArrayDeque<>();
-        Set<String> active = new HashSet<>();
-        return flattenRecursive(normalized, stack, active, 0);
+    public String process(String zipShaderPath) throws VpfxShaderIncludeException {
+        return processInternal(normalizeZipPath(zipShaderPath), new HashSet<>(), 0);
     }
 
-    private String flattenRecursive(
-            String currentPath,
-            Deque<String> stack,
-            Set<String> active,
+    private String processInternal(
+            String currentZipPath,
+            Set<String> activeStack,
             int depth
     ) throws VpfxShaderIncludeException {
         if (depth > MAX_INCLUDE_DEPTH) {
             throw new VpfxShaderIncludeException(
                     "I001",
-                    currentPath,
-                    "Include depth exceeded max depth " + MAX_INCLUDE_DEPTH
+                    currentZipPath,
+                    "Include depth exceeded limit: " + MAX_INCLUDE_DEPTH
             );
         }
 
-        String cached = flattenedCache.get(currentPath);
-        if (cached != null) {
-            return cached;
-        }
-
-        if (active.contains(currentPath)) {
-            StringBuilder cycle = new StringBuilder();
-            for (String item : stack) {
-                if (!cycle.isEmpty()) {
-                    cycle.append(" -> ");
-                }
-                cycle.append(item);
-            }
-            if (!cycle.isEmpty()) {
-                cycle.append(" -> ");
-            }
-            cycle.append(currentPath);
-
+        if (!activeStack.add(currentZipPath)) {
             throw new VpfxShaderIncludeException(
                     "I002",
-                    currentPath,
-                    "Include cycle detected: " + cycle
+                    currentZipPath,
+                    "Include cycle detected"
             );
         }
 
-        ZipEntry entry = zipFile.getEntry(currentPath);
-        if (entry == null || entry.isDirectory()) {
+        String source = readZipText(currentZipPath);
+        Matcher matcher = INCLUDE_PATTERN.matcher(source);
+        StringBuffer out = new StringBuffer();
+
+        while (matcher.find()) {
+            String rawIncludePath = matcher.group(1);
+            String resolvedPath = resolveIncludePath(currentZipPath, rawIncludePath);
+
+            String expanded = processInternal(resolvedPath, activeStack, depth + 1);
+
+            String replacement = "\n// BEGIN include: " + resolvedPath + "\n"
+                    + expanded
+                    + "\n// END include: " + resolvedPath + "\n";
+
+            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+
+        matcher.appendTail(out);
+        activeStack.remove(currentZipPath);
+        return out.toString();
+    }
+
+    private String resolveIncludePath(String currentZipPath, String includePath)
+            throws VpfxShaderIncludeException {
+        String normalizedInclude = includePath.replace('\\', '/').trim();
+
+        if (normalizedInclude.isBlank()) {
             throw new VpfxShaderIncludeException(
                     "I003",
-                    currentPath,
-                    "Included file not found in zip: " + currentPath
+                    currentZipPath,
+                    "Blank include path"
             );
         }
 
-        active.add(currentPath);
-        stack.addLast(currentPath);
-
-        String source = readZipText(currentPath);
-        StringBuilder out = new StringBuilder();
-        String[] lines = source.split("\\R", -1);
-
-        for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-            String line = lines[lineIndex];
-            Matcher matcher = INCLUDE_PATTERN.matcher(line);
-
-            if (!matcher.matches()) {
-                out.append(line);
-                if (lineIndex < lines.length - 1) {
-                    out.append('\n');
-                }
-                continue;
-            }
-
-            String includeTarget = matcher.group(1);
-            String resolvedPath = resolveIncludePath(currentPath, includeTarget);
-
-            out.append("// >>> begin include: ").append(resolvedPath).append('\n');
-            out.append(flattenRecursive(resolvedPath, stack, active, depth + 1));
-            out.append('\n');
-            out.append("// <<< end include: ").append(resolvedPath);
-
-            if (lineIndex < lines.length - 1) {
-                out.append('\n');
-            }
-        }
-
-        stack.removeLast();
-        active.remove(currentPath);
-
-        String flattened = out.toString();
-        flattenedCache.put(currentPath, flattened);
-        return flattened;
-    }
-
-    private String resolveIncludePath(String currentPath, String includeTarget)
-            throws VpfxShaderIncludeException {
-        if (includeTarget == null || includeTarget.isBlank()) {
+        if (normalizedInclude.contains("..")) {
             throw new VpfxShaderIncludeException(
                     "I004",
-                    currentPath,
-                    "Include target is blank"
+                    includePath,
+                    "Parent path traversal is not allowed in include paths"
             );
         }
 
-        final String candidate;
-        if (includeTarget.startsWith("/")) {
-            candidate = includeTarget.substring(1);
-        } else {
-            int slash = currentPath.lastIndexOf('/');
-            String currentDir = slash >= 0 ? currentPath.substring(0, slash + 1) : "";
-            candidate = currentDir + includeTarget;
+        // 绝对 ZIP 风格：从 shaders/ 开始
+        if (normalizedInclude.startsWith("shaders/")) {
+            return normalizeZipPath(normalizedInclude);
         }
 
-        String normalized = normalizeZipPath(candidate);
-        if (normalized.isBlank()) {
+        // 前导 / 也当作 ZIP 内部绝对路径
+        while (normalizedInclude.startsWith("/")) {
+            normalizedInclude = normalizedInclude.substring(1);
+        }
+        if (normalizedInclude.startsWith("shaders/")) {
+            return normalizeZipPath(normalizedInclude);
+        }
+
+        // 相对路径：相对当前文件目录
+        int slash = currentZipPath.lastIndexOf('/');
+        String baseDir = slash >= 0 ? currentZipPath.substring(0, slash + 1) : "";
+        return normalizeZipPath(baseDir + normalizedInclude);
+    }
+
+    private String readZipText(String zipPath) throws VpfxShaderIncludeException {
+        ZipEntry entry = zipFile.getEntry(zipPath);
+        if (entry == null || entry.isDirectory()) {
             throw new VpfxShaderIncludeException(
                     "I005",
-                    currentPath,
-                    "Resolved include path is blank for target: " + includeTarget
+                    zipPath,
+                    "Included shader file not found in zip"
             );
         }
 
-        return normalized;
-    }
-
-    /**
-     * 归一化 ZIP 内路径：
-     * - 统一分隔符
-     * - 处理 .
-     * - 处理 ..
-     * - 不允许越过根目录
-     */
-    private String normalizeZipPath(String rawPath) throws VpfxShaderIncludeException {
-        String path = rawPath.replace('\\', '/').trim();
-
-        while (path.startsWith("./")) {
-            path = path.substring(2);
-        }
-
-        String[] parts = path.split("/");
-        Deque<String> normalized = new ArrayDeque<>();
-
-        for (String part : parts) {
-            if (part.isEmpty() || ".".equals(part)) {
-                continue;
-            }
-
-            if ("..".equals(part)) {
-                if (normalized.isEmpty()) {
-                    throw new VpfxShaderIncludeException(
-                            "I006",
-                            rawPath,
-                            "Include path escapes zip root: " + rawPath
-                    );
-                }
-                normalized.removeLast();
-                continue;
-            }
-
-            normalized.addLast(part);
-        }
-
-        return String.join("/", normalized);
-    }
-
-    private String readZipText(String zipEntryPath) throws VpfxShaderIncludeException {
-        try (InputStream in = zipFile.getInputStream(zipFile.getEntry(zipEntryPath))) {
+        try (InputStream in = zipFile.getInputStream(entry)) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new VpfxShaderIncludeException(
-                    "I007",
-                    zipEntryPath,
-                    "Failed to read zip entry: " + e.getMessage()
+                    "I006",
+                    zipPath,
+                    "Failed to read included shader file: " + e.getMessage()
             );
         }
+    }
+
+    private String normalizeZipPath(String path) {
+        String normalized = path.replace('\\', '/').trim();
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        return normalized;
     }
 }

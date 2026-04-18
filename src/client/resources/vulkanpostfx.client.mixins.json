@@ -9,7 +9,8 @@
 		"ShaderManagerCompilationCacheMixin",
 		"PostChainAccessor",
 		"PostChainProcessMixin",
-		"GameRendererAccessor"
+		"GameRendererAccessor",
+		"PostPassBuiltinUniformMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

@@ -1,14 +1,12 @@
 package com.ionhex975.vulkanpostfx.client.pack.vpfx;
 
 import com.ionhex975.vulkanpostfx.VulkanPostFX;
+import com.ionhex975.vulkanpostfx.client.shader.VpfxShaderSourcePreprocessor;
 import com.ionhex975.vulkanpostfx.client.shader.include.VpfxShaderIncludeException;
-import com.ionhex975.vulkanpostfx.client.shader.include.VpfxShaderIncludeProcessor;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
-import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
@@ -20,7 +18,6 @@ import java.util.zip.ZipFile;
  * - validate graph/capabilities
  * - 检查 shader 资源文件存在
  * - 检查 shader include 可展开
- * - 检查 manifest 声明的 textures 存在
  */
 public final class VpfxNativeZipPackLoader {
     private final VpfxPackManifestParser manifestParser = new VpfxPackManifestParser();
@@ -62,11 +59,10 @@ public final class VpfxNativeZipPackLoader {
                 }
             }
 
-            validateShaderFilesExistAndIncludes(zipFile, graph);
-            validateTextureEntries(zipFile, manifest);
+            validateShaderFilesExistAndPreprocess(zipFile, graph);
 
             VulkanPostFX.LOGGER.info(
-                    "[{}] VPFX native pack loaded: id='{}', name='{}', version='{}', entryPostEffect='{}', targets={}, passes={}, textures={}, runtimeCapabilities={}",
+                    "[{}] VPFX native pack loaded: id='{}', name='{}', version='{}', entryPostEffect='{}', targets={}, passes={}, runtimeCapabilities={}",
                     VulkanPostFX.MOD_ID,
                     manifest.getPackId(),
                     manifest.getName(),
@@ -74,7 +70,6 @@ public final class VpfxNativeZipPackLoader {
                     manifest.getEntryPostEffect(),
                     graph.getTargets().size(),
                     graph.getPasses().size(),
-                    manifest.getTextures().size(),
                     runtimeCapabilities
             );
 
@@ -88,9 +83,9 @@ public final class VpfxNativeZipPackLoader {
         }
     }
 
-    private void validateShaderFilesExistAndIncludes(ZipFile zipFile, VpfxGraphDefinition graph)
+    private void validateShaderFilesExistAndPreprocess(ZipFile zipFile, VpfxGraphDefinition graph)
             throws VpfxPackLoadException {
-        VpfxShaderIncludeProcessor includeProcessor = new VpfxShaderIncludeProcessor(zipFile);
+        VpfxShaderSourcePreprocessor preprocessor = new VpfxShaderSourcePreprocessor(zipFile);
 
         for (int i = 0; i < graph.getPasses().size(); i++) {
             VpfxPassDefinition pass = graph.getPasses().get(i);
@@ -115,39 +110,22 @@ public final class VpfxNativeZipPackLoader {
             }
 
             try {
-                includeProcessor.process(vertexPath);
+                preprocessor.preprocess(vertexPath);
             } catch (VpfxShaderIncludeException e) {
                 throw new VpfxPackLoadException(
                         "S004",
                         "passes[" + i + "].vertex_shader",
-                        "Vertex shader include error [" + e.getCode() + "][" + e.getPath() + "]: " + e.getMessage()
+                        "Vertex shader preprocess error [" + e.getCode() + "][" + e.getPath() + "]: " + e.getMessage()
                 );
             }
 
             try {
-                includeProcessor.process(fragmentPath);
+                preprocessor.preprocess(fragmentPath);
             } catch (VpfxShaderIncludeException e) {
                 throw new VpfxPackLoadException(
                         "S005",
                         "passes[" + i + "].fragment_shader",
-                        "Fragment shader include error [" + e.getCode() + "][" + e.getPath() + "]: " + e.getMessage()
-                );
-            }
-        }
-    }
-
-    private void validateTextureEntries(ZipFile zipFile, VpfxPackManifest manifest)
-            throws VpfxPackLoadException {
-        for (Map.Entry<String, VpfxTextureManifestEntry> entry : manifest.getTextures().entrySet()) {
-            String textureName = entry.getKey();
-            VpfxTextureManifestEntry texture = entry.getValue();
-
-            ZipEntry zipEntry = zipFile.getEntry(texture.getPath());
-            if (zipEntry == null || zipEntry.isDirectory()) {
-                throw new VpfxPackLoadException(
-                        "T001",
-                        "textures." + textureName + ".path",
-                        "Texture file not found in zip: " + texture.getPath()
+                        "Fragment shader preprocess error [" + e.getCode() + "][" + e.getPath() + "]: " + e.getMessage()
                 );
             }
         }
