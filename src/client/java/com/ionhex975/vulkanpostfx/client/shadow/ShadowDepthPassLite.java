@@ -6,33 +6,19 @@ import com.ionhex975.vulkanpostfx.client.pack.vpfx.VpfxRuntimeCapabilities;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.CommandEncoder;
 import com.mojang.blaze3d.systems.RenderSystem;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.LevelRenderer;
 
-/**
- * Shadow depth pass 轻量骨架。
- *
- * 当前阶段只做：
- * - 清除 shadow target 的 color/depth
- * - 标记本帧 shadow pass 已执行
- *
- * 还不做：
- * - 从太阳视角真正绘制世界几何
- *
- * 这版修复点：
- * - 完全放弃旧式 bindWrite 思路
- * - 直接使用 26.2 正确的 CommandEncoder clear API
- */
 public final class ShadowDepthPassLite {
-    private static boolean firstExecutedLogged;
+    private static Boolean lastLoggedCastersRendered;
 
     private ShadowDepthPassLite() {
     }
 
-    public static void execute() {
+    public static void execute(Minecraft minecraft, LevelRenderer levelRenderer) {
         RenderSystem.assertOnRenderThread();
 
-        VpfxRuntimeCapabilities caps =
-                new VpfxCapabilityResolver().resolve();
-
+        VpfxRuntimeCapabilities caps = new VpfxCapabilityResolver().resolve();
         if (!caps.isShadowDepth()) {
             return;
         }
@@ -40,7 +26,7 @@ public final class ShadowDepthPassLite {
         ShadowFrameState state = ShadowFrameState.get();
         ShadowRenderTargetsLite targets = ShadowRenderTargetsLite.get();
 
-        if (!state.isValid() || !state.isShadowTargetReady() || !targets.isReady()) {
+        if (!state.isValid() || !state.isShadowPassEnabled() || !state.isShadowTargetReady() || !targets.isReady()) {
             return;
         }
 
@@ -61,27 +47,49 @@ public final class ShadowDepthPassLite {
                         target.getColorTexture(),
                         0,
                         target.getDepthTexture(),
-                        0.0
+                        1.0
                 );
             } else if (target.getDepthTexture() != null) {
-                encoder.clearDepthTexture(target.getDepthTexture(), 0.0);
+                encoder.clearDepthTexture(target.getDepthTexture(), 1.0);
             } else {
                 throw new IllegalStateException("Shadow target has no depth texture");
             }
 
-            state.markShadowPassExecuted();
+            boolean terrainRendered = ShadowTerrainPassLite.execute(
+                    minecraft,
+                    levelRenderer,
+                    state,
+                    target
+            );
 
-            if (!firstExecutedLogged) {
-                firstExecutedLogged = true;
+            int entitySubmitted = ShadowEntityPassLite.execute(
+                    minecraft,
+                    levelRenderer,
+                    state,
+                    target
+            );
+
+            boolean castersRendered = terrainRendered || entitySubmitted > 0;
+
+            state.markShadowPassExecuted(castersRendered);
+
+            if (lastLoggedCastersRendered == null || lastLoggedCastersRendered != castersRendered) {
+                lastLoggedCastersRendered = castersRendered;
+
                 VulkanPostFX.LOGGER.info(
-                        "[{}] Shadow depth pass lite executed: shadowMapSize={}",
+                        "[{}] Shadow depth pass executed: shadowMapSize={}, terrainShadowDistance={}, entityShadowDistance={}, terrainRendered={}, entitySubmitted={}, castersRendered={}",
                         VulkanPostFX.MOD_ID,
-                        state.getShadowMapSize()
+                        state.getShadowMapSize(),
+                        state.getTerrainShadowDistance(),
+                        state.getEntityShadowDistance(),
+                        terrainRendered,
+                        entitySubmitted,
+                        castersRendered
                 );
             }
         } catch (Throwable t) {
             VulkanPostFX.LOGGER.error(
-                    "[{}] Shadow depth pass lite execution failed",
+                    "[{}] Shadow depth pass execution failed",
                     VulkanPostFX.MOD_ID,
                     t
             );

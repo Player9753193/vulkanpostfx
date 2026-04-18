@@ -7,18 +7,11 @@ import org.joml.Vector3f;
 /**
  * 每帧阴影状态。
  *
- * 当前阶段保存：
- * - 相机位置
- * - shadowAngle
- * - 太阳方向
- * - 阴影视图矩阵
- * - 阴影投影矩阵
- * - 阴影 VP 矩阵
- * - shadow depth target 是否已准备
- * - shadow map 尺寸
- * - 是否请求执行 shadow pass
- * - 本帧 shadow pass 是否已执行
- * - 本帧是否已把主深度镜像到 shadow target
+ * Shadow Map v1 第二批：
+ * - 明确 shadow pass enabled / target ready / pass executed / casters rendered
+ * - 明确 terrain/entity 阴影距离
+ * - 明确 shadowEntities / shadowPlayer
+ * - 明确不再把 main depth mirror 当成真正 shadow map
  */
 public final class ShadowFrameState {
     private static final ShadowFrameState INSTANCE = new ShadowFrameState();
@@ -31,10 +24,18 @@ public final class ShadowFrameState {
     private final Matrix4f shadowViewProjectionMatrix = new Matrix4f();
 
     private boolean valid;
+    private boolean shadowPassEnabled;
     private boolean shadowTargetReady;
     private int shadowMapSize;
+
+    private float terrainShadowDistance = 160.0F;
+    private float entityShadowDistance = 64.0F;
+    private boolean shadowEntities = true;
+    private boolean shadowPlayer = true;
+
     private boolean shadowRenderRequested;
     private boolean shadowPassExecuted;
+    private boolean shadowCastersRendered;
     private boolean shadowDepthMirrored;
 
     private ShadowFrameState() {
@@ -57,14 +58,34 @@ public final class ShadowFrameState {
         this.shadowViewMatrix.set(shadowViewMatrix);
         this.shadowProjectionMatrix.set(shadowProjectionMatrix);
         this.shadowViewProjectionMatrix.set(shadowProjectionMatrix).mul(shadowViewMatrix);
+
         this.valid = true;
         this.shadowPassExecuted = false;
+        this.shadowCastersRendered = false;
         this.shadowDepthMirrored = false;
+    }
+
+    public void setShadowPassEnabled(boolean enabled) {
+        this.shadowPassEnabled = enabled;
+    }
+
+    public boolean isShadowPassEnabled() {
+        return shadowPassEnabled;
     }
 
     public void setShadowTargetState(boolean ready, int size) {
         this.shadowTargetReady = ready;
         this.shadowMapSize = size;
+    }
+
+    public void setShadowDistances(float terrainShadowDistance, float entityShadowDistance) {
+        this.terrainShadowDistance = terrainShadowDistance;
+        this.entityShadowDistance = entityShadowDistance;
+    }
+
+    public void setShadowCasterControls(boolean shadowEntities, boolean shadowPlayer) {
+        this.shadowEntities = shadowEntities;
+        this.shadowPlayer = shadowPlayer;
     }
 
     public void requestShadowRender() {
@@ -77,12 +98,17 @@ public final class ShadowFrameState {
         return requested;
     }
 
-    public void markShadowPassExecuted() {
+    public void markShadowPassExecuted(boolean castersRendered) {
         this.shadowPassExecuted = true;
+        this.shadowCastersRendered = castersRendered;
     }
 
     public boolean wasShadowPassExecuted() {
         return this.shadowPassExecuted;
+    }
+
+    public boolean wereShadowCastersRendered() {
+        return this.shadowCastersRendered;
     }
 
     public void markShadowDepthMirrored() {
@@ -95,10 +121,12 @@ public final class ShadowFrameState {
 
     public void invalidate() {
         this.valid = false;
+        this.shadowPassEnabled = false;
         this.shadowTargetReady = false;
         this.shadowMapSize = 0;
         this.shadowRenderRequested = false;
         this.shadowPassExecuted = false;
+        this.shadowCastersRendered = false;
         this.shadowDepthMirrored = false;
     }
 
@@ -112,6 +140,22 @@ public final class ShadowFrameState {
 
     public int getShadowMapSize() {
         return this.shadowMapSize;
+    }
+
+    public float getTerrainShadowDistance() {
+        return terrainShadowDistance;
+    }
+
+    public float getEntityShadowDistance() {
+        return entityShadowDistance;
+    }
+
+    public boolean isShadowEntities() {
+        return shadowEntities;
+    }
+
+    public boolean isShadowPlayer() {
+        return shadowPlayer;
     }
 
     public Vec3 getCameraPos() {

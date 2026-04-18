@@ -10,7 +10,9 @@
 		"PostChainAccessor",
 		"PostChainProcessMixin",
 		"GameRendererAccessor",
-		"PostPassBuiltinUniformMixin"
+		"PostPassBuiltinUniformMixin",
+		"PostChainAddToFrameMixin",
+		"LevelRendererShadowAccess"
 	],
 	"injectors": {
 		"defaultRequire": 1

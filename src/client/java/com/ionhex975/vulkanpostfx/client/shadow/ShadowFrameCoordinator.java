@@ -9,8 +9,12 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 /**
- * Shadow Pipeline v1/v2：
- * 每帧同步阴影矩阵、太阳方向，并准备 shadow target。
+ * 每帧同步阴影矩阵、太阳方向。
+ *
+ * 第二批整理：
+ * - 这里只负责“算状态”
+ * - 不再在这里 prepare shadow target
+ * - 不再隐式推进 shadow pass 生命周期
  */
 public final class ShadowFrameCoordinator {
     private static final float DEFAULT_SHADOW_HALF_PLANE = 72.0F;
@@ -27,7 +31,7 @@ public final class ShadowFrameCoordinator {
             DeltaTracker deltaTracker,
             CameraRenderState cameraState
     ) {
-        if (minecraft.level == null) {
+        if (minecraft.level == null || cameraState == null || !cameraState.initialized) {
             ShadowFrameState.get().invalidate();
             return;
         }
@@ -70,12 +74,10 @@ public final class ShadowFrameCoordinator {
                 shadowProjection
         );
 
-        ShadowRendererLite.prepareFrame(minecraft, cameraState);
-
         if (!firstFrameLogged) {
             firstFrameLogged = true;
             VulkanPostFX.LOGGER.info(
-                    "[{}] Shadow pipeline v1 synced: cameraPos={}, shadowAngle={}, sunAngleDegrees={}, sunDir=({}, {}, {})",
+                    "[{}] Shadow pipeline synced: cameraPos={}, shadowAngle={}, sunAngleDegrees={}, sunDir=({}, {}, {})",
                     VulkanPostFX.MOD_ID,
                     cameraState.pos,
                     round3(shadowAngle),

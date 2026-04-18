@@ -11,14 +11,15 @@ public final class PostFxExternalTargetIds {
             Identifier.tryParse(VulkanPostFX.MOD_ID + ":shadow_depth");
 
     /**
-     * 当前对外正式允许的 external targets。
+     * 当前对外允许的 external targets。
      *
-     * 主线收束阶段：
-     * - 只保留 minecraft:main
-     * - shadow_depth 常量仍保留给内部开发/未来功能，但暂不对外宣称已稳定支持
+     * Shadow Debug View v1：
+     * - minecraft:main
+     * - vulkanpostfx:shadow_depth
      */
     private static final Set<Identifier> ALLOWED = Set.of(
-            PostChain.MAIN_TARGET_ID
+            PostChain.MAIN_TARGET_ID,
+            SHADOW_DEPTH
     );
 
     private PostFxExternalTargetIds() {

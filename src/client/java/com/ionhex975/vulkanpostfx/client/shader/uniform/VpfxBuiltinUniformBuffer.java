@@ -6,34 +6,35 @@ import com.mojang.blaze3d.buffers.Std140SizeCalculator;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
+import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 
 import java.nio.ByteBuffer;
 
 /**
- * 当前 v1 builtin UBO writer。
+ * Projection / Linear Depth v3 builtin UBO writer。
  *
  * layout(std140) uniform VpfxBuiltins {
+ *     mat4 vpfx_ProjectionMatrix;
+ *     mat4 vpfx_InverseProjectionMatrix;
  *     vec4 vpfx_TimeInfo;
  *     vec4 vpfx_ViewInfo;
+ *     vec4 vpfx_ProjectionInfo;
+ *     vec4 vpfx_ScreenInfo;
  * };
  *
- * vpfx_TimeInfo:
- *   x = vpfx_Time
- *   y = vpfx_DeltaTime
- *   z = vpfx_GameTime
- *   w = vpfx_FrameIndex
- *
- * vpfx_ViewInfo:
- *   x = vpfx_CameraPos.x
- *   y = vpfx_CameraPos.y
- *   z = vpfx_CameraPos.z
- *   w = vpfx_RainStrength
+ * 关键变化：
+ * - 不再从 GameRenderState 猜 projection；
+ * - 直接从 world render 阶段抓下来的 VpfxFrameProjectionState 读。
  */
 public final class VpfxBuiltinUniformBuffer {
     public static final String BLOCK_NAME = "VpfxBuiltins";
 
     public static final int UBO_SIZE = new Std140SizeCalculator()
+            .putMat4f()
+            .putMat4f()
+            .putVec4()
+            .putVec4()
             .putVec4()
             .putVec4()
             .get();
@@ -51,13 +52,6 @@ public final class VpfxBuiltinUniformBuffer {
     private VpfxBuiltinUniformBuffer() {
     }
 
-    /**
-     * 更新一个已经存在的 PostPass custom uniform buffer。
-     *
-     * 注意：
-     * 这里只写已有 buffer。
-     * buffer 的创建由 PostPass 构造阶段、来自 JSON uniforms 完成。
-     */
     public static void writeToExisting(GpuBuffer buffer) {
         if (buffer == null || buffer.isClosed()) {
             return;
@@ -69,6 +63,8 @@ public final class VpfxBuiltinUniformBuffer {
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer data = Std140Builder.onStack(stack, UBO_SIZE)
+                    .putMat4f(snapshot.projectionMatrix)
+                    .putMat4f(snapshot.inverseProjectionMatrix)
                     .putVec4(
                             snapshot.timeSeconds,
                             snapshot.deltaSeconds,
@@ -80,6 +76,18 @@ public final class VpfxBuiltinUniformBuffer {
                             snapshot.cameraY,
                             snapshot.cameraZ,
                             snapshot.rainStrength
+                    )
+                    .putVec4(
+                            snapshot.zNear,
+                            snapshot.zFar,
+                            snapshot.aspect,
+                            0.0F
+                    )
+                    .putVec4(
+                            snapshot.screenWidth,
+                            snapshot.screenHeight,
+                            snapshot.invScreenWidth,
+                            snapshot.invScreenHeight
                     )
                     .get();
 
@@ -148,7 +156,41 @@ public final class VpfxBuiltinUniformBuffer {
             rainStrength = clamp(minecraft.level.getRainLevel(partialTick), 0.0F, 1.0F);
         }
 
+        VpfxFrameProjectionState.Snapshot projectionState = VpfxFrameProjectionState.snapshot();
+
+        Matrix4f projectionMatrix = new Matrix4f();
+        Matrix4f inverseProjectionMatrix = new Matrix4f();
+
+        float zNear;
+        float zFar;
+        float aspect;
+        float screenWidth;
+        float screenHeight;
+
+        if (projectionState.valid()) {
+            projectionMatrix.set(projectionState.projectionMatrix());
+            inverseProjectionMatrix.set(projectionState.inverseProjectionMatrix());
+            zNear = projectionState.zNear();
+            zFar = projectionState.zFar();
+            aspect = projectionState.aspect();
+            screenWidth = projectionState.screenWidth();
+            screenHeight = projectionState.screenHeight();
+        } else {
+            projectionMatrix.identity();
+            inverseProjectionMatrix.identity();
+            zNear = 0.05F;
+            zFar = 1.0F;
+            screenWidth = Math.max(1.0F, minecraft.getMainRenderTarget().width);
+            screenHeight = Math.max(1.0F, minecraft.getMainRenderTarget().height);
+            aspect = screenWidth / screenHeight;
+        }
+
+        float invScreenWidth = 1.0F / screenWidth;
+        float invScreenHeight = 1.0F / screenHeight;
+
         return new Snapshot(
+                projectionMatrix,
+                inverseProjectionMatrix,
                 cachedTimeSeconds,
                 cachedDeltaSeconds,
                 cachedGameTimeSeconds,
@@ -156,7 +198,14 @@ public final class VpfxBuiltinUniformBuffer {
                 (float) camX,
                 (float) camY,
                 (float) camZ,
-                rainStrength
+                rainStrength,
+                zNear,
+                zFar,
+                aspect,
+                screenWidth,
+                screenHeight,
+                invScreenWidth,
+                invScreenHeight
         );
     }
 
@@ -165,6 +214,8 @@ public final class VpfxBuiltinUniformBuffer {
     }
 
     private record Snapshot(
+            Matrix4f projectionMatrix,
+            Matrix4f inverseProjectionMatrix,
             float timeSeconds,
             float deltaSeconds,
             float gameTimeSeconds,
@@ -172,7 +223,14 @@ public final class VpfxBuiltinUniformBuffer {
             float cameraX,
             float cameraY,
             float cameraZ,
-            float rainStrength
+            float rainStrength,
+            float zNear,
+            float zFar,
+            float aspect,
+            float screenWidth,
+            float screenHeight,
+            float invScreenWidth,
+            float invScreenHeight
     ) {
     }
 }

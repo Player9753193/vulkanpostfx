@@ -41,14 +41,8 @@ public final class VpfxGraphValidator {
             VpfxTargetDefinition target = entry.getValue();
             if (target.getScale().isPresent()) {
                 double scale = target.getScale().get();
-                if (scale <= 0.0 || scale > 1.0) {
-                    messages.add(fatal("G011", "targets." + targetId + ".scale", "scale must be in (0, 1]"));
-                } else if (scale != 1.0) {
-                    messages.add(fatal(
-                            "G011",
-                            "targets." + targetId + ".scale",
-                            "Scaled targets are declared but not implemented in VPFX v1 runtime yet"
-                    ));
+                if (!Double.isFinite(scale) || scale <= 0.0 || scale > 1.0) {
+                    messages.add(fatal("G011", "targets." + targetId + ".scale", "scale must be a finite number in (0, 1]"));
                 }
             }
         }

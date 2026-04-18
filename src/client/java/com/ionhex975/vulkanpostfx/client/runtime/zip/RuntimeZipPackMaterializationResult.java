@@ -1,8 +1,10 @@
 package com.ionhex975.vulkanpostfx.client.runtime.zip;
 
+import com.ionhex975.vulkanpostfx.client.pack.vpfx.VpfxTargetDefinition;
 import net.minecraft.resources.Identifier;
 
 import java.nio.file.Path;
+import java.util.Map;
 
 public final class RuntimeZipPackMaterializationResult {
     private final String packId;
@@ -10,6 +12,7 @@ public final class RuntimeZipPackMaterializationResult {
     private final Path runtimeRoot;
     private final Identifier externalPostEffectId;
     private final Path runtimeTextureManifestPath;
+    private final Map<String, VpfxTargetDefinition> targetDefinitions;
 
     public RuntimeZipPackMaterializationResult(
             String packId,
@@ -18,14 +21,24 @@ public final class RuntimeZipPackMaterializationResult {
             Identifier externalPostEffectId,
             Path runtimeTextureManifestPath
     ) {
+        this(packId, runtimeNamespace, runtimeRoot, externalPostEffectId, runtimeTextureManifestPath, Map.of());
+    }
+
+    public RuntimeZipPackMaterializationResult(
+            String packId,
+            String runtimeNamespace,
+            Path runtimeRoot,
+            Identifier externalPostEffectId,
+            Path runtimeTextureManifestPath,
+            Map<String, VpfxTargetDefinition> targetDefinitions
+    ) {
         this.packId = packId;
         this.runtimeNamespace = runtimeNamespace;
         this.runtimeRoot = runtimeRoot;
         this.externalPostEffectId = externalPostEffectId;
         this.runtimeTextureManifestPath = runtimeTextureManifestPath;
+        this.targetDefinitions = Map.copyOf(targetDefinitions);
     }
-
-    // ===== 新风格 getter =====
 
     public String getPackId() {
         return packId;
@@ -47,7 +60,9 @@ public final class RuntimeZipPackMaterializationResult {
         return runtimeTextureManifestPath;
     }
 
-    // ===== 兼容旧调用风格（保留现有调用点不改） =====
+    public Map<String, VpfxTargetDefinition> getTargetDefinitions() {
+        return targetDefinitions;
+    }
 
     public String packId() {
         return packId;
@@ -67,5 +82,9 @@ public final class RuntimeZipPackMaterializationResult {
 
     public Path runtimeTextureManifestPath() {
         return runtimeTextureManifestPath;
+    }
+
+    public Map<String, VpfxTargetDefinition> targetDefinitions() {
+        return targetDefinitions;
     }
 }

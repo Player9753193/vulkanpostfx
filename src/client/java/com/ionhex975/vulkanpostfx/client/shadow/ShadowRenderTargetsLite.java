@@ -6,14 +6,12 @@ import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 
 /**
- * Shadow depth target 轻量管理器。
+ * Shadow depth target 管理器。
  *
- * 当前阶段目标：
- * - 真正分配一个 shadow target
- * - 管理尺寸变化与释放
- *
- * 不再使用反射。
- * 26.2 的 TextureTarget / RenderTarget API 已经可以直接调用。
+ * 第二批整理：
+ * - 正式按“固定 shadow resolution”工作
+ * - 不再服务于 main depth mirror
+ * - 仍然先保持单个正方形 shadow map
  */
 public final class ShadowRenderTargetsLite {
     private static final ShadowRenderTargetsLite INSTANCE = new ShadowRenderTargetsLite();

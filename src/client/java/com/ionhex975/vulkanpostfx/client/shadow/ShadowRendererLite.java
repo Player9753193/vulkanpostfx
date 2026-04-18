@@ -3,11 +3,18 @@ package com.ionhex975.vulkanpostfx.client.shadow;
 import com.ionhex975.vulkanpostfx.VulkanPostFX;
 import com.ionhex975.vulkanpostfx.client.pack.vpfx.VpfxCapabilityResolver;
 import com.ionhex975.vulkanpostfx.client.pack.vpfx.VpfxRuntimeCapabilities;
-import com.mojang.blaze3d.pipeline.RenderTarget;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 
+/**
+ * Shadow renderer：独立 shadow map 资源 + 生命周期调度。
+ */
 public final class ShadowRendererLite {
+    private static final int DEFAULT_SHADOW_MAP_SIZE = 1024;
+    private static final float DEFAULT_TERRAIN_SHADOW_DISTANCE = 160.0F;
+    private static final float DEFAULT_ENTITY_SHADOW_DISTANCE_MUL = 0.4F;
+
     private static boolean firstPreparedLogged;
 
     private ShadowRendererLite() {
@@ -17,29 +24,30 @@ public final class ShadowRendererLite {
             Minecraft minecraft,
             CameraRenderState cameraState
     ) {
-        VpfxRuntimeCapabilities caps =
-                new VpfxCapabilityResolver().resolve();
+        VpfxRuntimeCapabilities caps = new VpfxCapabilityResolver().resolve();
+        ShadowFrameState state = ShadowFrameState.get();
 
         if (!caps.isShadowDepth()) {
-            ShadowFrameState.get().setShadowTargetState(false, 0);
+            state.setShadowPassEnabled(false);
+            state.setShadowTargetState(false, 0);
             return;
         }
 
-        if (minecraft.level == null) {
-            ShadowFrameState.get().setShadowTargetState(false, 0);
+        if (minecraft.level == null || cameraState == null || !cameraState.initialized) {
+            state.setShadowPassEnabled(false);
+            state.setShadowTargetState(false, 0);
             return;
         }
-
-        RenderTarget mainTarget = minecraft.getMainRenderTarget();
-        int targetWidth = mainTarget.width;
-        int targetHeight = mainTarget.height;
-
-        int mirrorSize = Math.min(targetWidth, targetHeight);
 
         ShadowRenderTargetsLite targets = ShadowRenderTargetsLite.get();
-        targets.ensureAllocated(mirrorSize);
+        targets.ensureAllocated(DEFAULT_SHADOW_MAP_SIZE);
 
-        ShadowFrameState state = ShadowFrameState.get();
+        float terrainDistance = DEFAULT_TERRAIN_SHADOW_DISTANCE;
+        float entityDistance = terrainDistance * DEFAULT_ENTITY_SHADOW_DISTANCE_MUL;
+
+        state.setShadowPassEnabled(true);
+        state.setShadowDistances(terrainDistance, entityDistance);
+        state.setShadowCasterControls(true, true);
         state.setShadowTargetState(targets.isReady(), targets.getShadowMapSize());
 
         if (targets.isReady()) {
@@ -49,25 +57,28 @@ public final class ShadowRendererLite {
         if (!firstPreparedLogged) {
             firstPreparedLogged = true;
             VulkanPostFX.LOGGER.info(
-                    "[{}] Shadow renderer lite prepared: cameraPos={}, mainTarget={}x{}, targetReady={}, shadowMapSize={}",
+                    "[{}] Shadow renderer prepared: cameraPos={}, shadowMapSize={}, targetReady={}, terrainShadowDistance={}, entityShadowDistance={}, shadowEntities={}, shadowPlayer={}",
                     VulkanPostFX.MOD_ID,
                     cameraState.pos,
-                    targetWidth,
-                    targetHeight,
+                    targets.getShadowMapSize(),
                     targets.isReady(),
-                    targets.getShadowMapSize()
+                    terrainDistance,
+                    entityDistance,
+                    true,
+                    true
             );
         }
     }
 
-    public static void executeShadowPassLite() {
-        VpfxRuntimeCapabilities caps =
-                new VpfxCapabilityResolver().resolve();
-
+    public static void executeShadowPassLite(
+            Minecraft minecraft,
+            LevelRenderer levelRenderer
+    ) {
+        VpfxRuntimeCapabilities caps = new VpfxCapabilityResolver().resolve();
         if (!caps.isShadowDepth()) {
             return;
         }
 
-        ShadowDepthPassLite.execute();
+        ShadowDepthPassLite.execute(minecraft, levelRenderer);
     }
 }

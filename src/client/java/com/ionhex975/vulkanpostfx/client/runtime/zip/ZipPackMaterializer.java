@@ -3,6 +3,7 @@ package com.ionhex975.vulkanpostfx.client.runtime.zip;
 import com.ionhex975.vulkanpostfx.VulkanPostFX;
 import com.ionhex975.vulkanpostfx.client.pack.ShaderPackContainer;
 import com.ionhex975.vulkanpostfx.client.pack.ZipShaderPackReader;
+import com.ionhex975.vulkanpostfx.client.pack.vpfx.VpfxTargetDefinition;
 import com.ionhex975.vulkanpostfx.client.runtime.texture.VpfxRuntimeTextureDescriptor;
 import com.ionhex975.vulkanpostfx.client.runtime.texture.VpfxRuntimeTextureManifest;
 import com.ionhex975.vulkanpostfx.client.runtime.texture.VpfxRuntimeTextureManifestWriter;
@@ -15,6 +16,8 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -83,6 +86,9 @@ public final class ZipPackMaterializer {
                 .resolve("vpfx")
                 .resolve("textures.json");
 
+        Map<String, VpfxTargetDefinition> runtimeTargetDefinitions =
+                buildRuntimeTargetDefinitions(activePack, runtimeNamespace);
+
         VulkanPostFX.LOGGER.info(
                 "[{}] Generated runtime texture manifest: namespace={}, textureCount={}, path={}",
                 VulkanPostFX.MOD_ID,
@@ -96,8 +102,55 @@ public final class ZipPackMaterializer {
                 runtimeNamespace,
                 runtimeRoot,
                 Identifier.fromNamespaceAndPath(runtimeNamespace, "main"),
-                runtimeTextureManifestPath
+                runtimeTextureManifestPath,
+                runtimeTargetDefinitions
         );
+    }
+
+    private static Map<String, VpfxTargetDefinition> buildRuntimeTargetDefinitions(
+            ShaderPackContainer activePack,
+            String runtimeNamespace
+    ) {
+        Map<String, VpfxTargetDefinition> sourceTargets =
+                activePack.vpfxDefinition().getGraph().getTargets();
+
+        String originalNamespace = activePack.manifest().id();
+        Map<String, VpfxTargetDefinition> result = new LinkedHashMap<>();
+
+        for (VpfxTargetDefinition source : sourceTargets.values()) {
+            String rewrittenId = rewriteNamespacedTargetId(
+                    source.getId(),
+                    originalNamespace,
+                    runtimeNamespace
+            );
+
+            Double scale = source.getScale().orElse(null);
+            float[] clearColor = source.getClearColor().orElse(null);
+
+            result.put(
+                    rewrittenId,
+                    new VpfxTargetDefinition(
+                            rewrittenId,
+                            scale,
+                            source.isUseDepth(),
+                            clearColor
+                    )
+            );
+        }
+
+        return result;
+    }
+
+    private static String rewriteNamespacedTargetId(
+            String value,
+            String originalNamespace,
+            String runtimeNamespace
+    ) {
+        String prefix = originalNamespace + ":";
+        if (value.startsWith(prefix)) {
+            return runtimeNamespace + ":" + value.substring(prefix.length());
+        }
+        return value;
     }
 
     private static void recreateDirectory(Path dir) throws IOException {

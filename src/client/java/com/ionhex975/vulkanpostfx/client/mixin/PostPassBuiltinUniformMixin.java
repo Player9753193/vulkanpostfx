@@ -18,9 +18,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.Map;
 
 /**
- * 正式方案：
- * - 不再往 customUniforms 里“新塞一个不存在的 uniform 名”
+ * 继续沿用当前正式方案：
+ * - 不往 customUniforms 里新塞不存在的 uniform 名
  * - 只更新已经由 JSON uniforms 创建好的 VpfxBuiltins buffer
+ *
+ * Linear Depth v1 只是扩展 VpfxBuiltins 的内容，
+ * 这里的注入点逻辑本身不需要改。
  */
 @Mixin(PostPass.class)
 public abstract class PostPassBuiltinUniformMixin {

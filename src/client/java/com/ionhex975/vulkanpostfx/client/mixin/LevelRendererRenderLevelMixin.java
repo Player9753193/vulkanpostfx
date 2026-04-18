@@ -1,6 +1,7 @@
 package com.ionhex975.vulkanpostfx.client.mixin;
 
 import com.ionhex975.vulkanpostfx.client.hook.PostFxHookBridge;
+import com.ionhex975.vulkanpostfx.client.shader.uniform.VpfxFrameProjectionState;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import net.minecraft.client.DeltaTracker;
@@ -30,8 +31,17 @@ public abstract class LevelRendererRenderLevelMixin {
             ChunkSectionsToRender chunkSectionsToRender,
             CallbackInfo ci
     ) {
+        Minecraft minecraft = Minecraft.getInstance();
+
+        VpfxFrameProjectionState.capture(
+                cameraState,
+                minecraft.getMainRenderTarget().width,
+                minecraft.getMainRenderTarget().height
+        );
+
         PostFxHookBridge.onWorldRenderHead(
-                Minecraft.getInstance(),
+                minecraft,
+                (LevelRenderer) (Object) this,
                 deltaTracker,
                 cameraState,
                 renderOutline,
