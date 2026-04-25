@@ -4,6 +4,7 @@ import com.ionhex975.vulkanpostfx.VulkanPostFX;
 import com.mojang.blaze3d.ProjectionType;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -18,6 +19,7 @@ import net.minecraft.client.renderer.ProjectionMatrixBuffer;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayerGroup;
 import net.minecraft.client.renderer.chunk.ChunkSectionsToRender;
+import org.joml.Matrix4fStack;
 
 import java.util.List;
 import java.util.OptionalDouble;
@@ -58,12 +60,18 @@ public final class ShadowTerrainPassLite {
             return false;
         }
 
+        /*
+         * 注意：
+         * 这里仍然沿用 prepareChunkRenders(...) 来拿 chunk draw groups，
+         * 但真正 raster 时已经不再使用 vanilla terrain pipeline，
+         * 而是改用我们自己的 shadow-only pipelines。
+         */
         ChunkSectionsToRender shadowChunks = levelRenderer.prepareChunkRenders(
-                shadowState.getShadowViewMatrix()
+                shadowState.getShadowViewProjectionMatrix()
         );
 
-        if (!hasOpaqueDraws(shadowChunks)) {
-            logSkip(SkipReason.NO_OPAQUE_DRAWS);
+        if (!hasShadowRelevantDraws(shadowChunks)) {
+            logSkip(SkipReason.NO_RELEVANT_DRAWS);
             return false;
         }
 
@@ -79,16 +87,25 @@ public final class ShadowTerrainPassLite {
         }
 
         RenderSystem.backupProjectionMatrix();
+
+        Matrix4fStack modelViewStack = RenderSystem.getModelViewStack();
+        modelViewStack.pushMatrix();
+        modelViewStack.identity();
+
         try {
+            /*
+             * 关键点：
+             * 自定义 shadow vertex shader 只使用 ProjMat，不使用 ModelViewMat，
+             * 这里直接把 shadow VP 塞进 Projection。
+             */
             GpuBufferSlice projectionSlice = SHADOW_PROJECTION.getBuffer(
-                    shadowState.getShadowProjectionMatrix()
+                    shadowState.getShadowViewProjectionMatrix()
             );
             RenderSystem.setProjectionMatrix(projectionSlice, ProjectionType.ORTHOGRAPHIC);
 
-            renderGroupToTarget(
+            renderShadowTerrainGroups(
                     minecraft,
                     shadowChunks,
-                    ChunkSectionLayerGroup.OPAQUE,
                     chunkLayerSampler,
                     shadowTarget
             );
@@ -98,7 +115,7 @@ public final class ShadowTerrainPassLite {
             if (!firstTerrainSuccessLogged) {
                 firstTerrainSuccessLogged = true;
                 VulkanPostFX.LOGGER.info(
-                        "[{}] Shadow terrain pass submitted opaque terrain draws successfully",
+                        "[{}] Shadow terrain pass submitted custom shadow-only terrain pipelines successfully",
                         VulkanPostFX.MOD_ID
                 );
             }
@@ -106,22 +123,23 @@ public final class ShadowTerrainPassLite {
             return true;
         } catch (Throwable t) {
             VulkanPostFX.LOGGER.error(
-                    "[{}] Shadow terrain pass failed during submission",
+                    "[{}] Shadow terrain pass failed during custom shadow terrain submission",
                     VulkanPostFX.MOD_ID,
                     t
             );
             return false;
         } finally {
+            modelViewStack.popMatrix();
             RenderSystem.restoreProjectionMatrix();
         }
     }
 
-    private static boolean hasOpaqueDraws(ChunkSectionsToRender chunkSections) {
+    private static boolean hasShadowRelevantDraws(ChunkSectionsToRender chunkSections) {
         if (chunkSections == null) {
             return false;
         }
 
-        for (ChunkSectionLayer layer : ChunkSectionLayerGroup.OPAQUE.layers()) {
+        for (ChunkSectionLayer layer : new ChunkSectionLayer[]{ChunkSectionLayer.SOLID, ChunkSectionLayer.CUTOUT}) {
             Int2ObjectOpenHashMap<List<RenderPass.Draw<GpuBufferSlice[]>>> drawGroup =
                     chunkSections.drawGroupsPerLayer().get(layer);
 
@@ -139,10 +157,9 @@ public final class ShadowTerrainPassLite {
         return false;
     }
 
-    private static void renderGroupToTarget(
+    private static void renderShadowTerrainGroups(
             Minecraft minecraft,
             ChunkSectionsToRender chunkSections,
-            ChunkSectionLayerGroup group,
             GpuSampler sampler,
             RenderTarget renderTarget
     ) {
@@ -153,52 +170,81 @@ public final class ShadowTerrainPassLite {
         VertexFormat.IndexType defaultIndexType =
                 chunkSections.maxIndicesRequired() == 0 ? null : autoIndices.type();
 
-        ChunkSectionLayer[] layers = group.layers();
-
         try (RenderPass renderPass = RenderSystem.getDevice()
                 .createCommandEncoder()
                 .createRenderPass(
-                        () -> "VulkanPostFX Shadow Terrain",
+                        () -> "VulkanPostFX Shadow Terrain Custom",
                         renderTarget.getColorTextureView(),
                         OptionalInt.empty(),
                         renderTarget.getDepthTextureView(),
-                        OptionalDouble.empty()
+                        /*
+                         * 这里恢复为标准 shadow clear：1.0
+                         * 之前的 0.0 只是判别实验。
+                         */
+                        OptionalDouble.of(1.0)
                 )) {
+            /*
+             * 仍然绑定默认 uniforms，让 Projection UBO / ChunkSection UBO 链继续可用。
+             * 但由于我们现在用的是自定义 shadow shader，
+             * 它不会再吃 vanilla core/terrain 里的 CameraBlockPos / CameraOffset 语义。
+             */
             RenderSystem.bindDefaultUniforms(renderPass);
+
+            /*
+             * CUTOUT shadow pass 需要采样 block atlas alpha；
+             * SOLID 也可以复用这组绑定，不影响。
+             */
             renderPass.bindTexture("Sampler0", chunkSections.textureView(), sampler);
-            renderPass.bindTexture(
-                    "Sampler2",
-                    minecraft.gameRenderer.lightmap(),
-                    RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR)
+
+            submitLayer(
+                    renderPass,
+                    chunkSections,
+                    ChunkSectionLayer.SOLID,
+                    ShadowRenderPipelines.SHADOW_TERRAIN_SOLID,
+                    defaultIndexBuffer,
+                    defaultIndexType
             );
 
-            for (ChunkSectionLayer layer : layers) {
-                renderPass.setPipeline(layer.pipeline());
+            submitLayer(
+                    renderPass,
+                    chunkSections,
+                    ChunkSectionLayer.CUTOUT,
+                    ShadowRenderPipelines.SHADOW_TERRAIN_CUTOUT,
+                    defaultIndexBuffer,
+                    defaultIndexType
+            );
+        }
+    }
 
-                Int2ObjectOpenHashMap<List<RenderPass.Draw<GpuBufferSlice[]>>> drawGroup =
-                        chunkSections.drawGroupsPerLayer().get(layer);
+    private static void submitLayer(
+            RenderPass renderPass,
+            ChunkSectionsToRender chunkSections,
+            ChunkSectionLayer sourceLayer,
+            RenderPipeline shadowPipeline,
+            GpuBuffer defaultIndexBuffer,
+            VertexFormat.IndexType defaultIndexType
+    ) {
+        Int2ObjectOpenHashMap<List<RenderPass.Draw<GpuBufferSlice[]>>> drawGroup =
+                chunkSections.drawGroupsPerLayer().get(sourceLayer);
 
-                if (drawGroup == null || drawGroup.isEmpty()) {
-                    continue;
-                }
+        if (drawGroup == null || drawGroup.isEmpty()) {
+            return;
+        }
 
-                for (List<RenderPass.Draw<GpuBufferSlice[]>> draws : drawGroup.values()) {
-                    if (!draws.isEmpty()) {
-                        List<RenderPass.Draw<GpuBufferSlice[]>> submitDraws = draws;
-                        if (layer == ChunkSectionLayer.TRANSLUCENT) {
-                            submitDraws = draws.reversed();
-                        }
+        renderPass.setPipeline(shadowPipeline);
 
-                        renderPass.drawMultipleIndexed(
-                                submitDraws,
-                                defaultIndexBuffer,
-                                defaultIndexType,
-                                List.of("ChunkSection"),
-                                chunkSections.chunkSectionInfos()
-                        );
-                    }
-                }
+        for (List<RenderPass.Draw<GpuBufferSlice[]>> draws : drawGroup.values()) {
+            if (draws == null || draws.isEmpty()) {
+                continue;
             }
+
+            renderPass.drawMultipleIndexed(
+                    draws,
+                    defaultIndexBuffer,
+                    defaultIndexType,
+                    List.of("ChunkSection"),
+                    chunkSections.chunkSectionInfos()
+            );
         }
     }
 
@@ -217,6 +263,6 @@ public final class ShadowTerrainPassLite {
         NO_LEVEL,
         NO_LEVEL_RENDERER,
         NO_SHADOW_TARGET,
-        NO_OPAQUE_DRAWS
+        NO_RELEVANT_DRAWS
     }
 }

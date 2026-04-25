@@ -73,20 +73,16 @@ public final class ShadowDepthPassLite {
 
             state.markShadowPassExecuted(castersRendered);
 
-            if (lastLoggedCastersRendered == null || lastLoggedCastersRendered != castersRendered) {
-                lastLoggedCastersRendered = castersRendered;
-
-                VulkanPostFX.LOGGER.info(
-                        "[{}] Shadow depth pass executed: shadowMapSize={}, terrainShadowDistance={}, entityShadowDistance={}, terrainRendered={}, entitySubmitted={}, castersRendered={}",
-                        VulkanPostFX.MOD_ID,
-                        state.getShadowMapSize(),
-                        state.getTerrainShadowDistance(),
-                        state.getEntityShadowDistance(),
-                        terrainRendered,
-                        entitySubmitted,
-                        castersRendered
-                );
-            }
+            VulkanPostFX.LOGGER.info(
+                    "[{}] Shadow depth pass executed: shadowMapSize={}, terrainShadowDistance={}, entityShadowDistance={}, terrainRendered={}, entitySubmitted={}, castersRendered={}",
+                    VulkanPostFX.MOD_ID,
+                    state.getShadowMapSize(),
+                    state.getTerrainShadowDistance(),
+                    state.getEntityShadowDistance(),
+                    terrainRendered,
+                    entitySubmitted,
+                    castersRendered
+            );
         } catch (Throwable t) {
             VulkanPostFX.LOGGER.error(
                     "[{}] Shadow depth pass execution failed",

@@ -117,19 +117,34 @@ public final class ZipPostEffectNamespaceRewriter {
             return;
         }
 
+        /**
+         * Shadow Apply Debug v1 的 VpfxBuiltins 布局：
+         *
+         * 4 * vec4
+         * 3 * mat4 = 12 * vec4
+         *
+         * 总计 16 个 vec4 slot。
+         *
+         * 这里的 JSON uniforms 只是为了让 PostPass 在构造阶段
+         * 给 custom uniform buffer 分到足够大的 GPU buffer。
+         */
+        final int vec4SlotCount = 16;
+
         JsonArray blockValues = new JsonArray();
 
-        JsonObject vec4Value = new JsonObject();
-        vec4Value.addProperty("type", "vec4");
+        for (int i = 0; i < vec4SlotCount; i++) {
+            JsonObject vec4Value = new JsonObject();
+            vec4Value.addProperty("type", "vec4");
 
-        JsonArray value = new JsonArray();
-        value.add(0.0F);
-        value.add(0.0F);
-        value.add(0.0F);
-        value.add(0.0F);
+            JsonArray value = new JsonArray();
+            value.add(0.0F);
+            value.add(0.0F);
+            value.add(0.0F);
+            value.add(0.0F);
 
-        vec4Value.add("value", value);
-        blockValues.add(vec4Value);
+            vec4Value.add("value", value);
+            blockValues.add(vec4Value);
+        }
 
         uniforms.add(VpfxBuiltinUniformBuffer.BLOCK_NAME, blockValues);
     }

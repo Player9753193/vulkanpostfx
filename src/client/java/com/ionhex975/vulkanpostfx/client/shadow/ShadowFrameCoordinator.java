@@ -17,11 +17,11 @@ import org.joml.Vector3f;
  * - 不再隐式推进 shadow pass 生命周期
  */
 public final class ShadowFrameCoordinator {
-    private static final float DEFAULT_SHADOW_HALF_PLANE = 72.0F;
-    private static final float DEFAULT_SHADOW_INTERVAL = 2.0F;
+    private static final float DEFAULT_SHADOW_HALF_PLANE = 320.0F;
+    private static final float DEFAULT_SHADOW_INTERVAL = 0.0F;
     private static final float DEFAULT_SUN_PATH_ROTATION = 0.0F;
 
-    private static boolean firstFrameLogged;
+    private static int debugLogCounter;
 
     private ShadowFrameCoordinator() {
     }
@@ -36,15 +36,21 @@ public final class ShadowFrameCoordinator {
             return;
         }
 
-        float sunAngleDegrees = minecraft.gameRenderer
+        float rawSunAngle = minecraft.gameRenderer
                 .getMainCamera()
                 .attributeProbe()
                 .getValue(EnvironmentAttributes.SUN_ANGLE, 0.0F);
 
-        float shadowAngle = (sunAngleDegrees / 360.0F) % 1.0F;
-        if (shadowAngle < 0.0F) {
-            shadowAngle += 1.0F;
+        /*
+         * EnvironmentAttributes.SUN_ANGLE 按角度制处理。
+         * 先归一化到 [0, 360)，再转成 [0, 1) 的 shadowAngle。
+         */
+        float sunAngleDegrees = rawSunAngle % 360.0F;
+        if (sunAngleDegrees < 0.0F) {
+            sunAngleDegrees += 360.0F;
         }
+
+        float shadowAngle = sunAngleDegrees / 360.0F;
 
         Vector3f sunDirection = SunDirectionProvider.fromSunAngle(
                 shadowAngle,
@@ -66,6 +72,7 @@ public final class ShadowFrameCoordinator {
                 ShadowMatricesLite.FAR
         );
 
+//        Matrix4f shadowVP = new Matrix4f(shadowProjection).mul(shadowView);
         ShadowFrameState.get().update(
                 cameraState.pos,
                 shadowAngle,
@@ -74,12 +81,14 @@ public final class ShadowFrameCoordinator {
                 shadowProjection
         );
 
-        if (!firstFrameLogged) {
-            firstFrameLogged = true;
+        debugLogCounter++;
+        if (debugLogCounter >= 60) {
+            debugLogCounter = 0;
             VulkanPostFX.LOGGER.info(
-                    "[{}] Shadow pipeline synced: cameraPos={}, shadowAngle={}, sunAngleDegrees={}, sunDir=({}, {}, {})",
+                    "[{}] Shadow pipeline v1 synced: cameraPos={}, rawSunAngle={}, shadowAngle={}, sunAngleDegrees={}, sunDir=({}, {}, {})",
                     VulkanPostFX.MOD_ID,
                     cameraState.pos,
+                    round3(rawSunAngle),
                     round3(shadowAngle),
                     round3(sunAngleDegrees),
                     round3(sunDirection.x),

@@ -3,39 +3,11 @@ package com.ionhex975.vulkanpostfx.client.shader.uniform;
 /**
  * VPFX builtin uniform 源码注入器。
  *
- * Projection / Linear Depth v2.1：
- * - 直接提供真实 ProjectionMatrix / InverseProjectionMatrix
- * - 使用 inverse projection 做 depth reconstruction
- *
- * 当前导出：
- * - vpfx_Time
- * - vpfx_DeltaTime
- * - vpfx_GameTime
- * - vpfx_FrameIndex
- * - vpfx_CameraPos
- * - vpfx_RainStrength
- * - vpfx_ZNear
- * - vpfx_ZFar
- * - vpfx_Aspect
- * - vpfx_ScreenSize
- * - vpfx_InvScreenSize
- * - vpfx_ProjectionMatrix
- * - vpfx_InverseProjectionMatrix
- *
- * 并提供 helper：
- * - vpfx_RawSceneDepth(...)
- * - vpfx_ViewPositionFromRaw(...)
- * - vpfx_LinearViewDepthFromRaw(...)
- * - vpfx_LinearDepth01FromRaw(...)
- * - vpfx_LinearViewDepth(...)
- * - vpfx_LinearDepth01(...)
- * - vpfx_DepthNear01(...)
- * - vpfx_DepthFar01(...)
- *
- * 关键修正：
- * raw depth sample 是 [0, 1]；
- * 当前这条 projection/inverse-projection 链更适合在重建前先转换为 clip z:
- *   clipZ = raw * 2 - 1
+ * Shadow Apply Debug v1：
+ * - 扩展 VpfxBuiltins，加入 SceneDepth 重建和 Shadow Apply 所需矩阵
+ * - 提供 helper：
+ *   - vpfx_ViewPositionFromRaw(...)
+ *   - vpfx_WorldPositionFromRaw(...)
  */
 public final class VpfxBuiltinUniformSourceInjector {
     private static final String BLOCK = """
@@ -43,86 +15,67 @@ public final class VpfxBuiltinUniformSourceInjector {
 #define VPFX_BUILTIN_UNIFORMS
 
 layout(std140) uniform VpfxBuiltins {
-    mat4 vpfx_ProjectionMatrix;
-    mat4 vpfx_InverseProjectionMatrix;
     vec4 vpfx_TimeInfo;
     vec4 vpfx_ViewInfo;
-    vec4 vpfx_ProjectionInfo;
-    vec4 vpfx_ScreenInfo;
+    vec4 vpfx_SceneInfo;
+    vec4 vpfx_ShadowInfo;
+    mat4 vpfx_InverseProjectionMatrix;
+    mat4 vpfx_InverseViewRotationMatrix;
+    mat4 vpfx_ShadowViewProjectionMatrix;
 };
 
-#define vpfx_Time          (vpfx_TimeInfo.x)
-#define vpfx_DeltaTime     (vpfx_TimeInfo.y)
-#define vpfx_GameTime      (vpfx_TimeInfo.z)
-#define vpfx_FrameIndex    (vpfx_TimeInfo.w)
+#define vpfx_Time           (vpfx_TimeInfo.x)
+#define vpfx_DeltaTime      (vpfx_TimeInfo.y)
+#define vpfx_GameTime       (vpfx_TimeInfo.z)
+#define vpfx_FrameIndex     (vpfx_TimeInfo.w)
 
-#define vpfx_CameraPos     (vpfx_ViewInfo.xyz)
-#define vpfx_RainStrength  (vpfx_ViewInfo.w)
+#define vpfx_CameraPos      (vpfx_ViewInfo.xyz)
+#define vpfx_RainStrength   (vpfx_ViewInfo.w)
 
-#define vpfx_ZNear         (vpfx_ProjectionInfo.x)
-#define vpfx_ZFar          (vpfx_ProjectionInfo.y)
-#define vpfx_Aspect        (vpfx_ProjectionInfo.z)
+#define vpfx_ViewSize       (vpfx_SceneInfo.xy)
+#define vpfx_InvViewSize    (vpfx_SceneInfo.zw)
 
-#define vpfx_ScreenSize    (vpfx_ScreenInfo.xy)
-#define vpfx_InvScreenSize (vpfx_ScreenInfo.zw)
+#define vpfx_ZNear          (vpfx_ShadowInfo.x)
+#define vpfx_ZFar           (vpfx_ShadowInfo.y)
+#define vpfx_ShadowMapSize  (vpfx_ShadowInfo.z)
+#define vpfx_ShadowBias     (vpfx_ShadowInfo.w)
 
-float vpfx_RawSceneDepth(sampler2D depthSampler, vec2 uv) {
-    return texture(depthSampler, uv).r;
+/**
+ * 从 raw scene depth 重建 view-space position。
+ *
+ * 当前按 Vulkan / zero-to-one depth 路线处理。
+ * 如果后续发现 y 方向需要翻转，只改这里就行。
+ */
+vec3 vpfx_ViewPositionFromRaw(sampler2D depthSampler, vec2 uv) {
+    float rawDepth = texture(depthSampler, uv).r;
+
+    // SceneDepth Y-flip 修正：
+    // 当前链路下，屏幕空间 depth 取样与我们原先假设的 Y 方向相反。
+    vec2 ndcUv = vec2(
+        uv.x,
+        1.0 - uv.y
+    );
+
+    vec4 clip = vec4(
+        ndcUv * 2.0 - 1.0,
+        rawDepth,
+        1.0
+    );
+
+    vec4 view = vpfx_InverseProjectionMatrix * clip;
+    return view.xyz / max(abs(view.w), 1e-6);
 }
 
 /**
- * 将当前屏幕 UV + raw depth 还原到 view space。
+ * 从 raw scene depth 重建 world-space position。
  *
- * 当前修正：
- * - raw depth sample 是 [0, 1]
- * - inverse projection 更适合吃 [-1, 1] clip z
- * - 因此先做 clipZ = raw * 2 - 1
- *
- * Y 仍使用屏幕到 NDC 的常规翻转。
+ * 注意：
+ * 这里的 vpfx_InverseViewRotationMatrix 只做方向旋转，
+ * 平移单独通过 vpfx_CameraPos 补回。
  */
-vec3 vpfx_ViewPositionFromRaw(sampler2D depthSampler, vec2 uv) {
-    float rawDepth = clamp(vpfx_RawSceneDepth(depthSampler, uv), 0.0, 1.0);
-
-    vec2 ndcXY = vec2(
-        uv.x * 2.0 - 1.0,
-        (1.0 - uv.y) * 2.0 - 1.0
-    );
-
-    float clipZ = rawDepth * 2.0 - 1.0;
-    vec4 clipPos = vec4(ndcXY, clipZ, 1.0);
-
-    vec4 viewPos = vpfx_InverseProjectionMatrix * clipPos;
-    float w = max(abs(viewPos.w), 1e-6);
-
-    return viewPos.xyz / w;
-}
-
-float vpfx_LinearViewDepthFromRaw(sampler2D depthSampler, vec2 uv) {
+vec3 vpfx_WorldPositionFromRaw(sampler2D depthSampler, vec2 uv) {
     vec3 viewPos = vpfx_ViewPositionFromRaw(depthSampler, uv);
-    return abs(viewPos.z);
-}
-
-float vpfx_LinearDepth01FromRaw(sampler2D depthSampler, vec2 uv) {
-    float nearPlane = max(vpfx_ZNear, 1e-6);
-    float farPlane = max(vpfx_ZFar, nearPlane + 1e-6);
-    float linearDepth = vpfx_LinearViewDepthFromRaw(depthSampler, uv);
-    return clamp((linearDepth - nearPlane) / (farPlane - nearPlane), 0.0, 1.0);
-}
-
-float vpfx_LinearViewDepth(sampler2D depthSampler, vec2 uv) {
-    return vpfx_LinearViewDepthFromRaw(depthSampler, uv);
-}
-
-float vpfx_LinearDepth01(sampler2D depthSampler, vec2 uv) {
-    return vpfx_LinearDepth01FromRaw(depthSampler, uv);
-}
-
-float vpfx_DepthNear01(sampler2D depthSampler, vec2 uv) {
-    return 1.0 - vpfx_LinearDepth01(depthSampler, uv);
-}
-
-float vpfx_DepthFar01(sampler2D depthSampler, vec2 uv) {
-    return vpfx_LinearDepth01(depthSampler, uv);
+    return (vpfx_InverseViewRotationMatrix * vec4(viewPos, 0.0)).xyz + vpfx_CameraPos;
 }
 
 #endif

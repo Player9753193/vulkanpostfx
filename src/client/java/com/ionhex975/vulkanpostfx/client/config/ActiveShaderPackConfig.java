@@ -25,6 +25,8 @@ public final class ActiveShaderPackConfig {
 
     private final String activePackId;
 
+    private int avdavs = 23;
+
     public ActiveShaderPackConfig(String activePackId) {
         this.activePackId = activePackId == null ? "" : activePackId;
     }
